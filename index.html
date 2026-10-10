@@ -41,7 +41,9 @@
     background:#fff; color:#e0457b; box-shadow:0 3px 0 #f3a3c2; cursor:pointer;
   }
   #parts button.all { background:#e0457b; color:#fff; }
-  #parts button.acc { width:auto; flex-basis:100%; max-width:280px; background:#fff7fb; }
+  #parts .row { width:100%; display:flex; gap:6px; justify-content:center; flex-wrap:wrap; }
+  #parts button.spd, #parts button.acc { background:#fff7fb; }
+  #parts button.spd.on { background:#ffd1e3; box-shadow:0 3px 0 #e0457b; }
   #piano {
     position:relative; width:min(100%,1000px); flex:1 1 0; min-height:0; max-height:440px;
     background:#7a4a3a; border-radius:20px; padding:12px 8px 8px;
@@ -312,19 +314,11 @@ function accNote(note, at, dur, vel) {
   o1.start(at); o2.start(at); o1.stop(end); o2.stop(end);
   accVoices.push({ at, o1, o2 });
 }
-// Играет кусок аккомпанемента от одной ноты мелодии до следующей (в темпе оригинала)
-function playAcc(from, to) {
+// Отменить аккомпанемент, который ещё не начал звучать
+function stopAcc() {
   const now = ctx.currentTime;
-  // то, что ещё не началось с прошлого нажатия, отменяем — игрок уже ушёл дальше
-  for (let i = accVoices.length - 1; i >= 0; i--) {
-    const v = accVoices[i];
-    if (v.at > now + 0.01) { v.o1.stop(); v.o2.stop(); accVoices.splice(i, 1); }
-    else if (v.at < now - 5) accVoices.splice(i, 1);
-  }
-  if (!accOn || !SONG || !SONG.acc) return;
-  SONG.acc.forEach(([o, n, d, v]) => {
-    if (o >= from - 0.02 && o < to - 0.02) accNote(n, now + 0.02 + (o - from), d, v);
-  });
+  accVoices.forEach(v => { if (v.at > now) { v.o1.stop(); v.o2.stop(); } });
+  accVoices.length = 0;
 }
 
 // ---------- Нажатия ----------
@@ -409,26 +403,43 @@ function setMode(m) {
 }
 document.querySelectorAll('.modes button').forEach(b =>
   b.addEventListener('click', () => { unlockAudio(); setMode(b.dataset.mode); }));
+let speed = +(localStorage.getItem('speed') || 0.75);
 if (SONG) {
   document.getElementById('modes').hidden = false;
   document.getElementById('learnBtn').textContent = '🎶 ' + SONG.title;
   const box = document.getElementById('parts');
   box.innerHTML = '<div class="ask">Что играем? 🐾</div>';
-  const accBtn = document.createElement('button');
-  const accLabel = () => accBtn.textContent = accOn ? '🎵 Аккомпанемент: вкл' : '🔇 Аккомпанемент: выкл';
-  accLabel(); accBtn.className = 'acc';
-  accBtn.addEventListener('click', () => { accOn = !accOn; localStorage.setItem('accOn', accOn ? '1' : '0'); accLabel(); });
   [{ name: 'Целиком', from: 0, to: SONG.notes.length, all: true }, ...SONG.parts].forEach(part => {
     const b = document.createElement('button');
     b.textContent = part.name; if (part.all) b.className = 'all';
     b.addEventListener('click', () => { unlockAudio(); box.classList.remove('show'); startLearn(part); });
     box.appendChild(b);
   });
-  box.appendChild(accBtn);
+  const row = document.createElement('div'); row.className = 'row';
+  [[0.5, '🐢 50%'], [0.75, '🐈 75%'], [1, '🐆 100%']].forEach(([v, label]) => {
+    const b = document.createElement('button');
+    b.textContent = label; b.className = 'spd' + (v === speed ? ' on' : '');
+    b.addEventListener('click', () => {
+      speed = v; localStorage.setItem('speed', v);
+      row.querySelectorAll('.spd').forEach(x => x.classList.toggle('on', x === b));
+    });
+    row.appendChild(b);
+  });
+  const accBtn = document.createElement('button');
+  const accLabel = () => accBtn.textContent = accOn ? '🎵 Аккомпанемент: вкл' : '🔇 Аккомпанемент: выкл';
+  accLabel(); accBtn.className = 'acc';
+  accBtn.addEventListener('click', () => { accOn = !accOn; localStorage.setItem('accOn', accOn ? '1' : '0'); accLabel(); });
+  row.appendChild(accBtn);
+  box.appendChild(row);
 }
 
 // ---------- Режим «Ждёт тебя» ----------
-// Ноты падают сверху; дойдя до котика, ждут, пока его нажмут.
+// У песни свой ровный ход (в темпе оригинала × скорость). Ноты падают на котиков;
+// если нужного котика не нажали, песня (и аккомпанемент) ждёт.
+// Прощаем: нажатие чуть раньше засчитывается, при небольшом опоздании песня не останавливается,
+// очень быстрые повторы играются сами.
+const EARLY = 0.4;  // с, насколько раньше можно нажать
+const GRACE = 0.3;  // с, сколько песня идёт дальше, прежде чем остановиться и ждать
 const lane = document.getElementById('lane');
 const lctx = lane.getContext('2d');
 let L = null; // состояние урока
@@ -439,25 +450,31 @@ function resizeLane() {
   lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
+const nextReq = (notes, i) => { while (i < notes.length && (notes[i].auto || notes[i].hit)) i++; return i; };
+
 let lastPart = null;
 function startLearn(part) {
   lastPart = part;
-  const notes = SONG.notes.slice(part.from, part.to)
-    .filter(([, n]) => keyByNote[n])
-    .map(([t, n, d, o]) => ({ t, n, d, o, hit: false, hitAt: 0 }));
-  // Ноты, звучащие одновременно, — одна «ступенька», нужно нажать все
-  const groups = [];
-  notes.forEach(x => {
-    const g = groups[groups.length - 1];
-    if (g && Math.abs(g.t - x.t) < 0.03) g.notes.push(x); else groups.push({ t: x.t, o: x.o, notes: [x] });
+  const notes = [];
+  SONG.notes.slice(part.from, part.to).filter(([, n]) => keyByNote[n]).forEach(([, n, d, o]) => {
+    const prev = notes[notes.length - 1], gap = prev ? o - prev.o : 9;
+    const auto = !!prev && (gap < 0.15 || (gap < 0.2 && prev.n === n));
+    if (prev) prev.len = Math.min(prev.d, gap);
+    notes.push({ n, o, d, len: d, auto, hit: false, hitAt: 0 });
   });
-  L = { notes, groups, gi: 0, time: groups[0].t - 2.5, last: performance.now(), done: false };
+  const t0 = notes[0].o - 2; // 2 с вступления, чтобы услышать ритм
+  const tEnd = notes[notes.length - 1].o + 1.5;
+  L = {
+    notes, ni: nextReq(notes, 0), T: t0, tEnd, last: performance.now(), finished: false,
+    acc: (SONG.acc || []).filter(a => a[0] >= t0 && a[0] < tEnd), ai: 0,
+    total: notes.filter(x => !x.auto).length, hits: 0,
+  };
   document.getElementById('finish').classList.remove('show');
   requestAnimationFrame(() => { resizeLane(); requestAnimationFrame(learnFrame); });
 }
 function stopLearn() {
   L = null;
-  playAcc(0, 0); // отменить запланированный аккомпанемент
+  stopAcc();
   KEYS.forEach(k => k.el.classList.remove('target'));
   lctx.clearRect(0, 0, lane.width, lane.height);
 }
@@ -471,25 +488,27 @@ document.getElementById('other').addEventListener('click', () => {
   document.getElementById('parts').classList.add('show');
 });
 
-function current() { return L && L.groups[L.gi]; }
 function learnPress(note) {
-  const g = current();
-  if (!g) return;
-  const waiting = L.time >= g.t - 0.35; // нота уже почти у котика
-  const x = g.notes.find(x => !x.hit && x.n === note);
-  if (x && waiting) {
-    x.hit = true; x.hitAt = performance.now();
-    if (g.notes.every(x => x.hit)) {
-      L.time = Math.max(L.time, g.t);
-      L.gi++;
-      const next = L.groups[L.gi];
-      playAcc(g.o, next ? next.o : g.o + 8); // после последней ноты — доиграть концовку
-      if (L.gi >= L.groups.length) { L.done = true; setTimeout(() => mode === 'learn' && show('finish'), 900); }
-    }
-  } else if (waiting) {
+  if (!L) return;
+  const req = L.notes[L.ni];
+  if (!req) return;
+  const soon = req.o - L.T <= EARLY * speed; // нота уже близко к котику
+  if (note === req.n && soon) {
+    req.hit = true; req.hitAt = performance.now(); L.hits++;
+    L.ni = nextReq(L.notes, L.ni + 1);
+  } else if (soon && note !== req.n) {
     const el = keyByNote[note].el;
     el.classList.remove('wrong'); void el.offsetWidth; el.classList.add('wrong');
   }
+}
+
+// Котик сам поёт быструю ноту
+function autoPlay(x) {
+  x.hit = true; x.hitAt = performance.now();
+  meow(x.n);
+  const el = keyByNote[x.n].el;
+  el.classList.add('on'); clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('on'), 160);
 }
 
 function roundRect(x, y, w, h, r) {
@@ -501,36 +520,52 @@ function roundRect(x, y, w, h, r) {
 function learnFrame(now) {
   if (!L) return;
   const dt = Math.min(0.1, (now - L.last) / 1000); L.last = now;
-  const g = current();
-  if (g) L.time = Math.min(L.time + dt, g.t); else L.time += dt;
+  const req = L.notes[L.ni];
+  const hold = req ? req.o + GRACE * speed : Infinity; // дальше без нажатия не идём
+  const T = Math.min(L.T + dt * speed, hold);
 
-  // подсветка нужных котиков
-  const need = new Set(g && L.time >= g.t - 0.35 ? g.notes.filter(x => !x.hit).map(x => x.n) : []);
-  KEYS.forEach(k => k.el.classList.toggle('target', need.has(k.note)));
+  // быстрые повторы после уже сыгранных нот — поют сами
+  for (let i = 0; i < L.ni && i < L.notes.length; i++) {
+    const x = L.notes[i];
+    if (x.auto && !x.hit && x.o <= T) autoPlay(x);
+  }
+  if (!req) L.notes.forEach(x => { if (x.auto && !x.hit && x.o <= T) autoPlay(x); });
+
+  // аккомпанемент: планируем чуть вперёд, но не дальше точки ожидания
+  const until = Math.min(T + 0.12, hold);
+  while (L.ai < L.acc.length && L.acc[L.ai][0] < until) {
+    const [o, n, d, v] = L.acc[L.ai++];
+    if (accOn) accNote(n, ctx.currentTime + 0.03 + Math.max(0, o - T) / speed, d / speed, v);
+  }
+  L.T = T;
+
+  if (!req && !L.finished && T >= L.tEnd) {
+    L.finished = true;
+    setTimeout(() => mode === 'learn' && L && show('finish'), 300);
+  }
+
+  // подсветка нужного котика
+  const target = req && req.o - T <= EARLY * speed + 0.3 ? req.n : null;
+  KEYS.forEach(k => k.el.classList.toggle('target', k.note === target));
 
   const W = lane.clientWidth, H = lane.clientHeight;
-  const pps = Math.max(H / 2.2, 90); // пикселей на секунду; не меньше, чтобы ноты подряд не слипались
+  const pps = Math.max(H / 2.2, 110) / speed; // пикселей на секунду песни
   lctx.clearRect(0, 0, W, H);
-  // дорожки
   lctx.fillStyle = 'rgba(255,255,255,.35)';
   roundRect(0, 0, W, H, 18); lctx.fill();
   const lr = lane.getBoundingClientRect();
   const col = {};
   KEYS.forEach(k => { const r = k.el.getBoundingClientRect(); col[k.note] = [r.left - lr.left, r.width]; });
   KEYS.filter(k => !k.black).forEach(k => {
-    const [x] = col[k.note];
-    lctx.fillStyle = 'rgba(122,74,58,.08)'; lctx.fillRect(x - 2.5, 0, 1.5, H);
+    lctx.fillStyle = 'rgba(122,74,58,.08)'; lctx.fillRect(col[k.note][0] - 2.5, 0, 1.5, H);
   });
-  // линия, где ноты встречают котиков
-  lctx.fillStyle = '#ff9cc0'; lctx.fillRect(0, H - 4, W, 4);
+  lctx.fillStyle = '#ff9cc0'; lctx.fillRect(0, H - 4, W, 4); // здесь ноты встречают котиков
 
   L.notes.forEach(x => {
-    const yb = H - (x.t - L.time) * pps;
-    const h = Math.max(Math.min(22, 0.32 * pps - 6), x.d * pps - 6);
-    if (yb < 0 || (yb - h > H)) return;
+    const yb = H - (x.o - T) * pps;
+    if (yb < 0 || yb - 60 > H) return;
     const k = keyByNote[x.n];
-    let [cx, cw] = col[x.n];
-    const pad = k.black ? 1 : cw * 0.12;
+    const [cx, cw] = col[x.n];
     let alpha = 1, grow = 0;
     if (x.hit) {
       const a = (now - x.hitAt) / 300;
@@ -538,24 +573,27 @@ function learnFrame(now) {
       alpha = 1 - a; grow = a * 8;
     }
     lctx.globalAlpha = alpha;
-    lctx.fillStyle = k.color;
-    lctx.strokeStyle = '#7a4a3a'; lctx.lineWidth = 2;
-    roundRect(cx + pad - grow, yb - h - grow, cw - pad * 2 + grow * 2, h + grow * 2, Math.min(12, cw / 3));
-    lctx.fill(); lctx.stroke();
-    lctx.font = `bold ${Math.min(16, cw * 0.35)}px system-ui`;
-    lctx.textAlign = 'center'; lctx.textBaseline = 'bottom';
-    lctx.fillStyle = k.color === '#3a3a3a' || k.black ? '#fff' : '#7a4a3a';
-    lctx.fillText('🐾', cx + cw / 2, yb - 3);
+    if (x.auto) {
+      // быстрая нота, сыграется сама — маленький кружок
+      lctx.fillStyle = k.color; lctx.strokeStyle = '#7a4a3a'; lctx.lineWidth = 1.5;
+      lctx.beginPath(); lctx.arc(cx + cw / 2, yb - 7, 6 + grow / 2, 0, Math.PI * 2); lctx.fill(); lctx.stroke();
+    } else {
+      const h = Math.max(18, x.len * pps - 5);
+      const pad = k.black ? 1 : cw * 0.12;
+      lctx.fillStyle = k.color; lctx.strokeStyle = '#7a4a3a'; lctx.lineWidth = 2;
+      roundRect(cx + pad - grow, yb - h - grow, cw - pad * 2 + grow * 2, h + grow * 2, Math.min(12, cw / 3, h / 2));
+      lctx.fill(); lctx.stroke();
+      lctx.font = `bold ${Math.min(16, cw * 0.35)}px system-ui`;
+      lctx.textAlign = 'center'; lctx.textBaseline = 'bottom';
+      lctx.fillText('🐾', cx + cw / 2, yb - 2);
+    }
     lctx.globalAlpha = 1;
   });
 
-  // прогресс
-  const total = L.groups.length;
   lctx.fillStyle = '#e0457b';
-  lctx.fillRect(0, 0, W * (L.gi / total), 4);
-  if (L.time < L.groups[0].t - 0.4) {
+  lctx.fillRect(0, 0, W * (L.hits / L.total), 4);
+  if (T < L.notes[0].o - 0.6) {
     lctx.font = 'bold 18px system-ui'; lctx.textAlign = 'center'; lctx.textBaseline = 'middle';
-    lctx.fillStyle = '#e0457b';
     lctx.fillText('Нажимай котика, когда нота до него долетит 🐾', W / 2, H / 3);
   }
   requestAnimationFrame(learnFrame);
