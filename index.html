@@ -197,13 +197,8 @@ const RU = ['До','До♯','Ре','Ре♯','Ми','Фа','Фа♯','Соль'
 // До♯→Ре, Ре♯→Фа, Фа♯→Соль, Соль♯→Ля, Ля♯→До (сдвиг в полутонах).
 const BLACK_PIANO = { 1: 1, 3: 2, 6: 1, 8: 1, 10: 2 };
 // Рояль: Salamander Grand Piano, Alexander Holm, CC BY 3.0 (через Tone.js)
-const PIANO = [
-  // gain — выравнивание громкости записей (рояль чуть тише котиков)
-  { url: 'sounds/piano/C4.mp3', note: 'C4', gain: 1.45 },
-  { url: 'sounds/piano/Ds4.mp3', note: 'D#4', gain: 1.55 },
-  { url: 'sounds/piano/A4.mp3', note: 'A4', gain: 1.9 },
-  { url: 'sounds/piano/C5.mp3', note: 'C5', gain: 4 },
-];
+const PIANO = ['C2','D#2','F#2','A2','C3','D#3','F#3','A3','C4','D#4','F#4','A4','C5','D#5','F#5','A5','C6']
+  .map(note => ({ note, url: `sounds/piano/${note.replace('#', 's')}.mp3` }));
 const midiOf = n => { const m = n.match(/^([A-G]#?)(\d)$/); return NAMES.indexOf(m[1]) + (+m[2] + 1) * 12; };
 const nameOf = m => NAMES[m % 12] + (Math.floor(m / 12) - 1);
 const freqOf = n => 440 * Math.pow(2, (midiOf(n) - 69) / 12);
@@ -288,7 +283,13 @@ buildKeyboard(CONFIG.low, CONFIG.high);
 
 // ---------- Звук ----------
 const ctx = new (window.AudioContext || window.webkitAudioContext)();
-const master = ctx.createGain(); master.gain.value = 0.9; master.connect(ctx.destination);
+// Общий выход через компрессор: барабаны и аккорды не дают перегруза
+const comp = ctx.createDynamicsCompressor();
+comp.threshold.value = -14; comp.knee.value = 10; comp.ratio.value = 4; comp.attack.value = 0.003; comp.release.value = 0.2;
+comp.connect(ctx.destination);
+const master = ctx.createGain(); master.gain.value = 0.9; master.connect(comp);
+// Аккомпанемент — своя шина, чтобы котики всегда были громче
+const accBus = ctx.createGain(); accBus.gain.value = 0.8; accBus.connect(master);
 let loaded = 0;
 MEOWS.forEach(m => fetch(m.url).then(r => r.arrayBuffer())
   .then(a => new Promise((ok, err) => ctx.decodeAudioData(a, ok, err)))
@@ -302,12 +303,20 @@ function unlockAudio() {
 }
 
 const voices = {}; // нота -> звучащий мяу, чтобы повторное нажатие не превращалось в кашу
+// Записи рояля разной громкости — выравниваем по атаке (самые громкие 300 мс)
+const PIANO_LEVEL = 0.16;
 PIANO.forEach(p => fetch(p.url).then(r => r.arrayBuffer())
   .then(a => new Promise((ok, err) => ctx.decodeAudioData(a, ok, err)))
-  .then(b => { p.buf = b; loaded++; }));
+  .then(b => {
+    const x = b.getChannelData(0), n = Math.min(x.length, Math.round(b.sampleRate * 0.3));
+    let e = 0; for (let i = 0; i < n; i++) e += x[i] * x[i];
+    p.gain = PIANO_LEVEL / Math.sqrt(e / n);
+    p.buf = b; loaded++;
+  }));
+const nearestPiano = note => PIANO.reduce((a, b) => Math.abs(midiOf(b.note) - midiOf(note)) < Math.abs(midiOf(a.note) - midiOf(note)) ? b : a);
 // Ближайшая запись рояля, сдвинутая на нужную ноту
 function pianoNote(key, note) {
-  const p = PIANO.reduce((a, b) => Math.abs(midiOf(b.note) - midiOf(note)) < Math.abs(midiOf(a.note) - midiOf(note)) ? b : a);
+  const p = nearestPiano(note);
   if (!p.buf) return;
   const t = ctx.currentTime;
   const old = voices[key];
@@ -337,30 +346,108 @@ function meow(note, when) {
   s.onended = () => { if (voices[note] && voices[note].s === s) delete voices[note]; };
 }
 
-// ---------- Аккомпанемент (мягкое электропианино) ----------
+// ---------- Аккомпанемент: инструменты ----------
 let accOn = localStorage.getItem('accOn') !== '0';
 const accVoices = [];
-function accNote(note, at, dur, vel) {
-  const f = freqOf(note), end = at + Math.max(dur, 0.25) + 0.35;
-  const o1 = ctx.createOscillator(); o1.type = 'sine'; o1.frequency.value = f;
-  const o2 = ctx.createOscillator(); o2.type = 'triangle'; o2.frequency.value = f * 2;
-  const g2 = ctx.createGain(); g2.gain.value = 0.25;
-  const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1800;
-  const env = ctx.createGain();
-  const peak = 0.22 * (vel / 100);
-  env.gain.setValueAtTime(0.0001, at);
-  env.gain.exponentialRampToValueAtTime(peak, at + 0.008);
-  env.gain.exponentialRampToValueAtTime(peak * 0.35, at + 0.25);
-  env.gain.setValueAtTime(peak * 0.35, at + Math.max(dur, 0.25));
-  env.gain.exponentialRampToValueAtTime(0.0001, end);
-  o1.connect(lp); o2.connect(g2); g2.connect(lp); lp.connect(env); env.connect(master);
-  o1.start(at); o2.start(at); o1.stop(end); o2.stop(end);
-  accVoices.push({ at, o1, o2 });
+const track = (at, ...nodes) => {
+  accVoices.push({ at, nodes });
+  if (accVoices.length > 400) { const now = ctx.currentTime; for (let i = accVoices.length - 1; i >= 0; i--) if (accVoices[i].at < now - 3) accVoices.splice(i, 1); }
+};
+const noiseBuf = (() => {
+  const b = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate), x = b.getChannelData(0);
+  for (let i = 0; i < x.length; i++) x[i] = Math.random() * 2 - 1;
+  return b;
+})();
+function envGain(at, peak, attack, hold, release) {
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, at);
+  g.gain.exponentialRampToValueAtTime(peak, at + attack);
+  g.gain.setValueAtTime(peak, at + Math.max(attack, hold));
+  g.gain.exponentialRampToValueAtTime(0.0001, at + Math.max(attack, hold) + release);
+  return g;
+}
+function osc(type, f, detune = 0) { const o = ctx.createOscillator(); o.type = type; o.frequency.value = f; o.detune.value = detune; return o; }
+const distCurve = (() => { const c = new Float32Array(1024); for (let i = 0; i < c.length; i++) { const x = i / 512 - 1; c[i] = Math.tanh(x * 4); } return c; })();
+
+const INSTRUMENTS = {
+  // настоящий рояль (Salamander)
+  piano(note, at, dur, v) {
+    const p = nearestPiano(note); if (!p.buf) return;
+    const s = ctx.createBufferSource(); s.buffer = p.buf;
+    s.playbackRate.value = Math.pow(2, (midiOf(note) - midiOf(p.note)) / 12);
+    const g = ctx.createGain(); g.gain.value = p.gain * 0.9 * v;
+    g.gain.setValueAtTime(p.gain * 0.9 * v, at + Math.max(dur, 0.15));
+    g.gain.setTargetAtTime(0, at + Math.max(dur, 0.15), 0.12);
+    s.connect(g); g.connect(accBus); s.start(at); s.stop(at + dur + 1);
+    track(at, s);
+  },
+  // бас: пила + квадрат через фильтр, который «закрывается» после атаки
+  bass(note, at, dur, v) {
+    const f = freqOf(note), end = Math.max(dur, 0.12);
+    const o1 = osc('sawtooth', f), o2 = osc('square', f / 2);
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 3;
+    lp.frequency.setValueAtTime(1600, at); lp.frequency.exponentialRampToValueAtTime(500, at + 0.15);
+    const g2 = ctx.createGain(); g2.gain.value = 0.5;
+    const g = envGain(at, 0.32 * v, 0.006, end, 0.08);
+    o1.connect(lp); o2.connect(g2); g2.connect(lp); lp.connect(g); g.connect(accBus);
+    o1.start(at); o2.start(at); o1.stop(at + end + 0.1); o2.stop(at + end + 0.1);
+    track(at, o1, o2);
+  },
+  // перегруженная гитара: две расстроенные пилы через «овердрайв»
+  guitar(note, at, dur, v) {
+    const f = freqOf(note), end = Math.max(dur, 0.1);
+    const o1 = osc('sawtooth', f, -8), o2 = osc('sawtooth', f, 8);
+    const ws = ctx.createWaveShaper(); ws.curve = distCurve;
+    const pre = ctx.createGain(); pre.gain.value = 0.6;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2400;
+    const g = envGain(at, 0.07 * v, 0.004, end, 0.1);
+    o1.connect(pre); o2.connect(pre); pre.connect(ws); ws.connect(lp); lp.connect(g); g.connect(accBus);
+    o1.start(at); o2.start(at); o1.stop(at + end + 0.15); o2.stop(at + end + 0.15);
+    track(at, o1, o2);
+  },
+  // струнные: три расстроенные пилы с мягкой атакой
+  strings(note, at, dur, v) {
+    const f = freqOf(note), end = Math.max(dur, 0.15);
+    const os = [-9, 0, 9].map(d => osc('sawtooth', f, d));
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1700; lp.Q.value = 0.7;
+    const g = envGain(at, 0.09 * v, 0.06, end, 0.22);
+    os.forEach(o => { o.connect(lp); o.start(at); o.stop(at + end + 0.3); });
+    lp.connect(g); g.connect(accBus);
+    track(at, ...os);
+  },
+  // барабаны (номера General MIDI)
+  drums(note, at, dur, v) {
+    const n = +note.slice(1);
+    const noise = (hp, peak, len, lowpass) => {
+      const s = ctx.createBufferSource(); s.buffer = noiseBuf;
+      const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = hp;
+      const g = envGain(at, peak * v, 0.001, 0, len);
+      s.connect(f);
+      if (lowpass) { const l = ctx.createBiquadFilter(); l.type = 'lowpass'; l.frequency.value = lowpass; f.connect(l); l.connect(g); } else f.connect(g);
+      g.connect(accBus); s.start(at, Math.random() * 0.5); s.stop(at + len + 0.05); track(at, s);
+    };
+    const thump = (f0, f1, peak, len) => {
+      const o = osc('sine', f0); o.frequency.setValueAtTime(f0, at); o.frequency.exponentialRampToValueAtTime(f1, at + len * 0.6);
+      const g = envGain(at, peak * v, 0.002, 0, len);
+      o.connect(g); g.connect(accBus); o.start(at); o.stop(at + len + 0.05); track(at, o);
+    };
+    if (n === 35 || n === 36) { thump(140, 48, 0.9, 0.35); noise(2000, 0.05, 0.02); }          // бочка
+    else if (n === 38 || n === 40 || n === 37) { thump(210, 160, 0.3, 0.12); noise(1500, 0.35, 0.18); } // малый
+    else if (n === 42 || n === 44) noise(7000, 0.12, 0.05);                                       // хай-хэт закрытый
+    else if (n === 46) noise(7000, 0.12, 0.25);                                                   // открытый
+    else if ([41, 43, 45, 47, 48, 50].includes(n)) thump(60 + (n - 41) * 12, 45 + (n - 41) * 8, 0.75, 0.4); // томы
+    else noise(4500, 0.18, 1.2);                                                                   // тарелки
+  },
+};
+// Баланс по замерам: группа примерно на 6 дБ тише котиков
+const INST_GAIN = { piano: 1, bass: 0.35, guitar: 1, strings: 1.45, drums: 0.8 };
+function accNote(note, at, dur, vel, inst = 'piano') {
+  (INSTRUMENTS[inst] || INSTRUMENTS.piano)(note, at, dur, (vel / 100) * (INST_GAIN[inst] || 1));
 }
 // Отменить аккомпанемент, который ещё не начал звучать
 function stopAcc() {
   const now = ctx.currentTime;
-  accVoices.forEach(v => { if (v.at > now) { v.o1.stop(); v.o2.stop(); } });
+  accVoices.forEach(v => { if (v.at > now) v.nodes.forEach(n => { try { n.stop(); } catch (e) {} }); });
   accVoices.length = 0;
 }
 
@@ -603,8 +690,8 @@ function learnFrame(now) {
     if (!x.sung) { x.sung = true; sing(x, ctx.currentTime + 0.03 + Math.max(0, x.o - T) / speed); }
   }
   while (L.ai < L.acc.length && L.acc[L.ai][0] < until) {
-    const [o, n, d, v] = L.acc[L.ai++];
-    if (accOn) accNote(n, ctx.currentTime + 0.03 + Math.max(0, o - T) / speed, d / speed, v);
+    const [o, n, d, v, inst] = L.acc[L.ai++];
+    if (accOn) accNote(n, ctx.currentTime + 0.03 + Math.max(0, o - T) / speed, d / speed, v, inst);
   }
   L.T = T;
 
