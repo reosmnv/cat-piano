@@ -188,6 +188,17 @@ document.getElementById('secretText').textContent = CONFIG.secretMessage;
 // ---------- Ноты ----------
 const NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 const RU = ['До','До♯','Ре','Ре♯','Ми','Фа','Фа♯','Соль','Соль♯','Ля','Ля♯','Си'];
+// Чёрные клавиши не мяукают, а играют рояль — ноты из лада песни (пентатоника ре минора),
+// октавой ниже котиков. Так любое нажатие звучит созвучно.
+const BLACK_PIANO = { 'C#': 'D4', 'D#': 'F4', 'F#': 'G4', 'G#': 'A4', 'A#': 'C5' };
+// Рояль: Salamander Grand Piano, Alexander Holm, CC BY 3.0 (через Tone.js)
+const PIANO = [
+  // gain — выравнивание громкости записей (рояль чуть тише котиков)
+  { url: 'sounds/piano/C4.mp3', note: 'C4', gain: 1.45 },
+  { url: 'sounds/piano/Ds4.mp3', note: 'D#4', gain: 1.55 },
+  { url: 'sounds/piano/A4.mp3', note: 'A4', gain: 1.9 },
+  { url: 'sounds/piano/C5.mp3', note: 'C5', gain: 4 },
+];
 const midiOf = n => { const m = n.match(/^([A-G]#?)(\d)$/); return NAMES.indexOf(m[1]) + (+m[2] + 1) * 12; };
 const nameOf = m => NAMES[m % 12] + (Math.floor(m / 12) - 1);
 const freqOf = n => 440 * Math.pow(2, (midiOf(n) - 69) / 12);
@@ -239,9 +250,10 @@ for (let m = midiOf(CONFIG.low); m <= midiOf(CONFIG.high); m++) {
   el.dataset.note = note;
   const color = black ? '#2b2230' : CAT_COLORS[whiteCount % CAT_COLORS.length];
   const code = black ? UPPER_CODES[whiteCount] : WHITE_CODES[whiteCount];
-  el.innerHTML = catSVG(color, black) + `<div class="label">${RU[m % 12]}</div>` + (code ? `<div class="hint">${CODE_LABEL(code)}</div>` : '');
+  const pianoNoteName = black ? BLACK_PIANO[NAMES[m % 12]] : null;
+  el.innerHTML = catSVG(color, black) + `<div class="label">${pianoNoteName ? '🎹' + RU[midiOf(pianoNoteName) % 12] : RU[m % 12]}</div>` + (code ? `<div class="hint">${CODE_LABEL(code)}</div>` : '');
   piano.appendChild(el);
-  const k = { note, el, black, color: black ? '#6b4f7a' : (color === '#ffffff' ? '#f3c6d8' : color), afterWhite: whiteCount - 1 };
+  const k = { note, el, black, piano: pianoNoteName, color: black ? '#6b4f7a' : (color === '#ffffff' ? '#f3c6d8' : color), afterWhite: whiteCount - 1 };
   KEYS.push(k); keyByNote[note] = k;
   if (code) keyByCode[code] = note;
   if (!black) whiteCount++;
@@ -278,6 +290,25 @@ function unlockAudio() {
 }
 
 const voices = {}; // нота -> звучащий мяу, чтобы повторное нажатие не превращалось в кашу
+PIANO.forEach(p => fetch(p.url).then(r => r.arrayBuffer())
+  .then(a => new Promise((ok, err) => ctx.decodeAudioData(a, ok, err)))
+  .then(b => { p.buf = b; loaded++; }));
+// Ближайшая запись рояля, сдвинутая на нужную ноту
+function pianoNote(key, note) {
+  const p = PIANO.reduce((a, b) => Math.abs(midiOf(b.note) - midiOf(note)) < Math.abs(midiOf(a.note) - midiOf(note)) ? b : a);
+  if (!p.buf) return;
+  const t = ctx.currentTime;
+  const old = voices[key];
+  if (old) { old.g.gain.setTargetAtTime(0, t, 0.03); old.s.stop(t + 0.15); }
+  const s = ctx.createBufferSource();
+  s.buffer = p.buf;
+  s.playbackRate.value = Math.pow(2, (midiOf(note) - midiOf(p.note)) / 12);
+  const g = ctx.createGain(); g.gain.value = p.gain;
+  s.connect(g); g.connect(master);
+  s.start(t); s.stop(t + 4);
+  voices[key] = { s, g };
+}
+
 function meow(note) {
   const m = meowFor(note);
   if (!m.buf) return;
@@ -323,12 +354,13 @@ function stopAcc() {
 
 // ---------- Нажатия ----------
 const WORDS = ['мяу!', 'мяу~', 'мур!', 'мяяу', 'мрр', 'мяу♪'];
+const PIANO_WORDS = ['♪', '♫', '♬', 'дзынь♪'];
 let presses = 0, secretShown = false;
 
 function press(note) {
   const k = keyByNote[note];
   if (!k) return;
-  meow(note);
+  if (k.piano) pianoNote(note, k.piano); else meow(note);
   const el = k.el;
   el.classList.add('on');
   clearTimeout(el._t);
@@ -337,7 +369,8 @@ function press(note) {
   const r = el.getBoundingClientRect();
   const f = document.createElement('div');
   f.className = 'float';
-  f.textContent = WORDS[Math.floor(Math.random() * WORDS.length)];
+  const words = k.piano ? PIANO_WORDS : WORDS;
+  f.textContent = words[Math.floor(Math.random() * words.length)];
   f.style.left = (r.left + r.width / 2) + 'px';
   f.style.top = (r.top + r.height * 0.45) + 'px';
   document.body.appendChild(f);
