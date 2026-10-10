@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#ffd6e7">
+<title>Мяу-пианино 🐱🎹</title>
+<style>
+  :root { --bg1:#ffe3ef; --bg2:#d9f0ff; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none; }
+  html,body { margin:0; height:100%; overflow:hidden; font-family: "Comic Sans MS","Trebuchet MS",system-ui,sans-serif; }
+  body {
+    background: linear-gradient(160deg,var(--bg1),var(--bg2));
+    display:flex; flex-direction:column; align-items:center;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  header { text-align:center; padding:10px 8px 4px; }
+  h1 { margin:0; font-size:clamp(22px,5vw,40px); color:#e0457b; text-shadow:2px 2px 0 #fff; }
+  .songs { display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:8px; }
+  .songs button {
+    font:inherit; font-size:clamp(13px,2.8vw,17px); border:none; border-radius:999px;
+    padding:8px 14px; background:#fff; color:#e0457b; box-shadow:0 3px 0 #f3a3c2; cursor:pointer;
+  }
+  .songs button:active { transform:translateY(2px); box-shadow:0 1px 0 #f3a3c2; }
+  .songs button.playing { background:#e0457b; color:#fff; }
+
+  #stage { flex:1; width:100%; display:flex; align-items:center; justify-content:center; padding:8px; }
+  #piano {
+    position:relative; width:min(100%,1000px); height:min(62vh,440px);
+    background:#7a4a3a; border-radius:22px; padding:14px 10px 10px;
+    box-shadow:0 10px 0 #5b3529, 0 18px 30px rgba(0,0,0,.25);
+    display:flex; gap:6px; touch-action:none;
+  }
+  .key { position:relative; border-radius:0 0 14px 14px; cursor:pointer; touch-action:none; }
+  .white {
+    flex:1; background:#fffdf8; box-shadow: inset 0 -10px 0 #eadfce;
+    display:flex; flex-direction:column; align-items:center; justify-content:flex-end; padding-bottom:12px;
+    transition: transform .06s, box-shadow .06s;
+  }
+  .white.on { transform:translateY(4px); box-shadow: inset 0 -4px 0 #eadfce; background:#fff4fa; }
+  .black {
+    position:absolute; top:14px; width:calc((100% - 20px) / 8 * 0.62); height:52%;
+    background:#2b2230; z-index:2; box-shadow: inset 0 -8px 0 #110c14;
+    display:flex; flex-direction:column; align-items:center; justify-content:flex-end; padding-bottom:6px;
+    transition: transform .06s;
+  }
+  .black.on { transform:translateY(3px); background:#4a3a52; }
+  .cat { width:88%; max-width:110px; transition: transform .12s cubic-bezier(.3,2,.5,1); }
+  .black .cat { width:92%; }
+  .key.on .cat { transform: translateY(-14%) scale(1.12) rotate(-4deg); }
+  .cat .mouth-open { display:none; }
+  .key.on .cat .mouth-open { display:inline; }
+  .key.on .cat .mouth-closed { display:none; }
+  .key.on .cat .eye { transform: scaleY(.25); }
+  .cat .eye { transform-box: fill-box; transform-origin:center; transition: transform .08s; }
+  .label { font-size:clamp(11px,2.4vw,18px); color:#b98a6a; margin-top:4px; font-weight:bold; }
+  .black .label { color:#c9b6d4; font-size:clamp(9px,1.8vw,13px); }
+  .hint { font-size:clamp(9px,1.6vw,12px); color:#cbb; margin-top:2px; }
+  .black .hint { color:#776a7d; }
+
+  .float {
+    position:fixed; pointer-events:none; font-weight:bold; color:#e0457b; font-size:clamp(16px,4vw,26px);
+    text-shadow:2px 2px 0 #fff; animation: rise 1s ease-out forwards; z-index:10; white-space:nowrap;
+  }
+  @keyframes rise { from { opacity:1; transform:translate(-50%,0) scale(.7); } to { opacity:0; transform:translate(-50%,-110px) scale(1.3); } }
+
+  #secret {
+    position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+    background:rgba(255,214,231,.85); z-index:20; padding:20px;
+  }
+  #secret.show { display:flex; animation: pop .4s cubic-bezier(.3,1.8,.5,1); }
+  #secret .card {
+    background:#fff; border-radius:28px; padding:28px 24px; text-align:center; max-width:420px;
+    box-shadow:0 10px 0 #f3a3c2;
+  }
+  #secret .big { font-size:72px; animation: beat 1s infinite; }
+  #secret p { font-size:clamp(20px,5vw,30px); color:#e0457b; margin:12px 0 18px; }
+  #secret button { font:inherit; font-size:18px; border:none; border-radius:999px; padding:10px 22px; background:#e0457b; color:#fff; cursor:pointer; }
+  @keyframes pop { from { transform:scale(.6); opacity:0; } to { transform:scale(1); opacity:1; } }
+  @keyframes beat { 0%,100% { transform:scale(1); } 50% { transform:scale(1.15); } }
+
+  #rotate { display:none; font-size:13px; color:#a77; text-align:center; padding:0 10px 6px; }
+  @media (orientation:portrait) and (max-width:600px) {
+    #rotate { display:block; }
+    #piano { height:48vh; padding:10px 6px 6px; gap:3px; }
+    .hint { display:none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">🐱 Мяу-пианино 🎹</h1>
+  <div class="songs">
+    <button data-song="twinkle">⭐ Звёздочка</button>
+    <button data-song="elka">🎄 Ёлочка</button>
+    <button data-song="kuznechik">🦗 Кузнечик</button>
+  </div>
+</header>
+<div id="rotate">📱↻ Поверни телефон — котикам будет просторнее</div>
+<div id="stage"><div id="piano"></div></div>
+
+<div id="secret">
+  <div class="card">
+    <div class="big">😻💕</div>
+    <p id="secretText"></p>
+    <button id="secretClose">Мур! 🐾</button>
+  </div>
+</div>
+
+<script>
+// ===================== НАСТРОЙКИ (меняйте тут) =====================
+const CONFIG = {
+  title: '🐱 Мяу-пианино 🎹',
+  // Секретное сообщение появится после N нажатий на котиков
+  secretMessage: 'Мур-мур! Это пианино сделано специально для тебя 💕',
+  secretAfter: 40,
+};
+// ===================================================================
+
+document.getElementById('title').textContent = CONFIG.title;
+document.getElementById('secretText').textContent = CONFIG.secretMessage;
+
+// ---------- Клавиши ----------
+const WHITE = [
+  { note:'C5',  name:'До',  key:'a', color:'#f6a04d' }, // рыжий
+  { note:'D5',  name:'Ре',  key:'s', color:'#bfbfbf' }, // серый
+  { note:'E5',  name:'Ми',  key:'d', color:'#f7e3c4' }, // кремовый
+  { note:'F5',  name:'Фа',  key:'f', color:'#3a3a3a' }, // чёрный
+  { note:'G5',  name:'Соль',key:'g', color:'#ffffff' }, // белый
+  { note:'A5',  name:'Ля',  key:'h', color:'#c98b5a' }, // коричневый
+  { note:'B5',  name:'Си',  key:'j', color:'#9fb4d6' }, // голубой
+  { note:'C6',  name:'До',  key:'k', color:'#f6a04d' },
+];
+// after = индекс белой клавиши, после которой стоит чёрная
+const BLACK = [
+  { note:'C#5', name:'До♯',  key:'w', after:0 },
+  { note:'D#5', name:'Ре♯',  key:'e', after:1 },
+  { note:'F#5', name:'Фа♯',  key:'t', after:3 },
+  { note:'G#5', name:'Соль♯',key:'y', after:4 },
+  { note:'A#5', name:'Ля♯',  key:'u', after:5 },
+];
+
+const SEMI = { C:0,'C#':1,D:2,'D#':3,E:4,F:5,'F#':6,G:7,'G#':8,A:9,'A#':10,B:11 };
+function freqOf(note) {
+  const m = note.match(/^([A-G]#?)(\d)$/);
+  const midi = SEMI[m[1]] + (+m[2] + 1) * 12;
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+function catSVG(color, small) {
+  const dark = (color === '#3a3a3a' || small);
+  const line = dark ? '#111' : '#5a3a2a';
+  const inner = '#ffb3c8';
+  const eye = dark ? '#ffd84a' : '#3b2a20';
+  return `
+  <svg class="cat" viewBox="0 0 100 90" xmlns="http://www.w3.org/2000/svg">
+    <polygon points="12,38 18,2 42,22" fill="${color}" stroke="${line}" stroke-width="2.5" stroke-linejoin="round"/>
+    <polygon points="88,38 82,2 58,22" fill="${color}" stroke="${line}" stroke-width="2.5" stroke-linejoin="round"/>
+    <polygon points="19,30 21,12 34,23" fill="${inner}"/>
+    <polygon points="81,30 79,12 66,23" fill="${inner}"/>
+    <ellipse cx="50" cy="52" rx="42" ry="35" fill="${color}" stroke="${line}" stroke-width="2.5"/>
+    <ellipse class="eye" cx="34" cy="46" rx="6" ry="8" fill="${eye}" stroke="${line}" stroke-width="1.5"/>
+    <ellipse class="eye" cx="66" cy="46" rx="6" ry="8" fill="${eye}" stroke="${line}" stroke-width="1.5"/>
+    <circle cx="36" cy="43" r="2" fill="#fff"/><circle cx="68" cy="43" r="2" fill="#fff"/>
+    <ellipse cx="22" cy="60" rx="6" ry="3.5" fill="#ff8fb1" opacity=".6"/>
+    <ellipse cx="78" cy="60" rx="6" ry="3.5" fill="#ff8fb1" opacity=".6"/>
+    <polygon points="45,56 55,56 50,62" fill="#ff7aa2"/>
+    <path class="mouth-closed" d="M40,66 Q45,71 50,64 Q55,71 60,66" fill="none" stroke="${line}" stroke-width="2.2" stroke-linecap="round"/>
+    <g class="mouth-open">
+      <path d="M41,64 Q50,62 59,64 Q57,82 50,82 Q43,82 41,64 Z" fill="#7a1f3a" stroke="${line}" stroke-width="2"/>
+      <ellipse cx="50" cy="77" rx="5" ry="3.5" fill="#ff7aa2"/>
+    </g>
+    <g stroke="${line}" stroke-width="1.5" stroke-linecap="round">
+      <line x1="4" y1="56" x2="26" y2="59"/><line x1="4" y1="66" x2="26" y2="63"/>
+      <line x1="96" y1="56" x2="74" y2="59"/><line x1="96" y1="66" x2="74" y2="63"/>
+    </g>
+  </svg>`;
+}
+
+const piano = document.getElementById('piano');
+const keyByNote = {};
+const keyByKbd = {};
+
+WHITE.forEach(k => {
+  const el = document.createElement('div');
+  el.className = 'key white';
+  el.dataset.note = k.note;
+  el.innerHTML = catSVG(k.color, false) + `<div class="label">${k.name}</div><div class="hint">${k.key.toUpperCase()}</div>`;
+  piano.appendChild(el);
+  keyByNote[k.note] = el; keyByKbd[k.key] = k.note;
+});
+BLACK.forEach(k => {
+  const el = document.createElement('div');
+  el.className = 'key black';
+  el.dataset.note = k.note;
+  el.innerHTML = catSVG('#2b2230', true) + `<div class="label">${k.name}</div><div class="hint">${k.key.toUpperCase()}</div>`;
+  piano.appendChild(el);
+  keyByNote[k.note] = el; keyByKbd[k.key] = k.note;
+});
+function layoutBlack() {
+  const whites = piano.querySelectorAll('.white');
+  const pr = piano.getBoundingClientRect();
+  BLACK.forEach(k => {
+    const a = whites[k.after].getBoundingClientRect();
+    const b = whites[k.after + 1].getBoundingClientRect();
+    const el = keyByNote[k.note];
+    const w = a.width * 0.62;
+    el.style.width = w + 'px';
+    el.style.left = ((a.right + b.left) / 2 - pr.left - w / 2) + 'px';
+  });
+}
+window.addEventListener('resize', layoutBlack);
+layoutBlack();
+
+// ---------- Звук: синтез «мяу» ----------
+let ctx, master;
+function audio() {
+  if (!ctx) {
+    // iPhone: играть звук даже при включённом беззвучном режиме
+    if (navigator.audioSession) navigator.audioSession.type = 'playback';
+    ctx =new (window.AudioContext || window.webkitAudioContext)();
+    master = ctx.createDynamicsCompressor();
+    const g = ctx.createGain(); g.gain.value = 0.9;
+    master.connect(g); g.connect(ctx.destination);
+  }
+  if (ctx.state === 'suspended') ctx.resume();
+  return ctx;
+}
+
+// Мяуканье: пилообразный тон через «гласные» фильтры (м-и-а-у) + изгиб высоты
+function meow(freq, when, dur) {
+  const c = audio();
+  const t = when ?? c.currentTime;
+  const d = dur ?? 0.6;
+  const r = 0.9 + Math.random() * 0.2; // каждый мяу чуть разный
+
+  const osc = c.createOscillator(); osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(freq * 0.82, t);
+  osc.frequency.exponentialRampToValueAtTime(freq * 1.04, t + d * 0.25);
+  osc.frequency.exponentialRampToValueAtTime(freq, t + d * 0.55);
+  osc.frequency.exponentialRampToValueAtTime(freq * 0.72, t + d);
+
+  const lfo = c.createOscillator(); lfo.frequency.value = 5.5 + Math.random() * 2;
+  const lfoG = c.createGain(); lfoG.gain.value = freq * 0.018;
+  lfo.connect(lfoG); lfoG.connect(osc.frequency);
+
+  const f1 = c.createBiquadFilter(); f1.type = 'bandpass'; f1.Q.value = 4;
+  f1.frequency.setValueAtTime(400 * r, t);
+  f1.frequency.linearRampToValueAtTime(1100 * r, t + d * 0.3);
+  f1.frequency.linearRampToValueAtTime(900 * r, t + d * 0.6);
+  f1.frequency.linearRampToValueAtTime(450 * r, t + d);
+
+  const f2 = c.createBiquadFilter(); f2.type = 'bandpass'; f2.Q.value = 6;
+  f2.frequency.setValueAtTime(1300 * r, t);
+  f2.frequency.linearRampToValueAtTime(2000 * r, t + d * 0.25);
+  f2.frequency.linearRampToValueAtTime(1500 * r, t + d * 0.6);
+  f2.frequency.linearRampToValueAtTime(800 * r, t + d);
+
+  const body = c.createBiquadFilter(); body.type = 'lowpass';
+  body.frequency.setValueAtTime(freq * 1.5, t);
+  const bodyG = c.createGain(); bodyG.gain.value = 0.35;
+
+  const env = c.createGain();
+  env.gain.setValueAtTime(0.0001, t);
+  env.gain.exponentialRampToValueAtTime(1, t + 0.06);
+  env.gain.setValueAtTime(1, t + d * 0.55);
+  env.gain.exponentialRampToValueAtTime(0.0001, t + d);
+
+  const mix = c.createGain(); mix.gain.value = 1.6;
+  osc.connect(f1); osc.connect(f2); osc.connect(body); body.connect(bodyG);
+  f1.connect(mix); f2.connect(mix); bodyG.connect(mix);
+  mix.connect(env); env.connect(master);
+
+  osc.start(t); lfo.start(t);
+  osc.stop(t + d + 0.05); lfo.stop(t + d + 0.05);
+}
+
+// ---------- Нажатия ----------
+const WORDS = ['мяу!', 'мяу~', 'мур!', 'мяяу', 'мрр', 'мяу♪'];
+let presses = 0, secretShown = false;
+
+function press(note, opts = {}) {
+  const el = keyByNote[note];
+  if (!el) return;
+  meow(freqOf(note), opts.when, opts.dur);
+  el.classList.add('on');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('on'), Math.max(220, (opts.dur || 0.4) * 700));
+
+  const r = el.getBoundingClientRect();
+  const f = document.createElement('div');
+  f.className = 'float';
+  f.textContent = WORDS[Math.floor(Math.random() * WORDS.length)];
+  f.style.left = (r.left + r.width / 2) + 'px';
+  f.style.top = (r.top + 10) + 'px';
+  document.body.appendChild(f);
+  setTimeout(() => f.remove(), 1000);
+
+  if (!opts.auto) {
+    presses++;
+    if (!secretShown && presses >= CONFIG.secretAfter) {
+      secretShown = true;
+      setTimeout(() => document.getElementById('secret').classList.add('show'), 600);
+    }
+  }
+}
+
+// Мультитач + «глиссандо» пальцем по клавишам
+const active = new Map(); // pointerId -> note
+function noteAt(x, y) {
+  const el = document.elementFromPoint(x, y);
+  const key = el && el.closest('.key');
+  return key ? key.dataset.note : null;
+}
+piano.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  const n = noteAt(e.clientX, e.clientY);
+  active.set(e.pointerId, n);
+  if (n) press(n);
+});
+piano.addEventListener('pointermove', e => {
+  if (!active.has(e.pointerId)) return;
+  const n = noteAt(e.clientX, e.clientY);
+  if (n && n !== active.get(e.pointerId)) press(n);
+  active.set(e.pointerId, n);
+});
+['pointerup', 'pointercancel', 'pointerleave'].forEach(t =>
+  piano.addEventListener(t, e => active.delete(e.pointerId)));
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+window.addEventListener('keydown', e => {
+  if (e.repeat) return;
+  const n = keyByKbd[e.key.toLowerCase()] || keyByKbd[ruToEn[e.key.toLowerCase()]];
+  if (n) press(n);
+});
+// Чтобы работало и с русской раскладкой
+const ruToEn = { 'ф':'a','ы':'s','в':'d','а':'f','п':'g','р':'h','о':'j','л':'k','ц':'w','у':'e','е':'t','н':'y','г':'u' };
+
+document.getElementById('secretClose').onclick = () =>
+  document.getElementById('secret').classList.remove('show');
+
+// ---------- Мелодии ----------
+// [нота, длительность в долях]
+const SONGS = {
+  twinkle: { bpm: 110, notes: [
+    ['C5',1],['C5',1],['G5',1],['G5',1],['A5',1],['A5',1],['G5',2],
+    ['F5',1],['F5',1],['E5',1],['E5',1],['D5',1],['D5',1],['C5',2],
+    ['G5',1],['G5',1],['F5',1],['F5',1],['E5',1],['E5',1],['D5',2],
+    ['G5',1],['G5',1],['F5',1],['F5',1],['E5',1],['E5',1],['D5',2],
+    ['C5',1],['C5',1],['G5',1],['G5',1],['A5',1],['A5',1],['G5',2],
+    ['F5',1],['F5',1],['E5',1],['E5',1],['D5',1],['D5',1],['C5',2],
+  ]},
+  elka: { bpm: 140, notes: [
+    ['C5',1],['A5',1],['A5',1],['G5',1],['A5',1],['F5',1],['C5',1],['C5',1],
+    ['C5',1],['A5',1],['A5',1],['A#5',1],['G5',1],['C6',3],
+    ['C6',1],['D5',1],['D5',1],['A#5',1],['A#5',1],['A5',1],['G5',1],['F5',1],
+    ['C5',1],['A5',1],['A5',1],['G5',1],['A5',1],['F5',3],
+  ]},
+  kuznechik: { bpm: 200, notes: [
+    ['A5',1],['E5',1],['A5',1],['E5',1],['A5',1],['G#5',1],['G#5',2],
+    ['G#5',1],['E5',1],['G#5',1],['E5',1],['G#5',1],['A5',1],['A5',2],
+    ['A5',1],['E5',1],['A5',1],['E5',1],['A5',1],['G#5',1],['G#5',2],
+    ['G#5',1],['E5',1],['G#5',1],['E5',1],['G#5',1],['A5',3],
+  ]},
+};
+
+let songTimers = [];
+function stopSong() {
+  songTimers.forEach(clearTimeout); songTimers = [];
+  document.querySelectorAll('.songs button').forEach(b => b.classList.remove('playing'));
+}
+function playSong(name, btn) {
+  const wasPlaying = btn.classList.contains('playing');
+  stopSong();
+  if (wasPlaying) return;
+  const c = audio();
+  const song = SONGS[name];
+  const beat = 60 / song.bpm;
+  let t = 0.1;
+  btn.classList.add('playing');
+  song.notes.forEach(([n, len]) => {
+    const dur = Math.min(0.9, beat * len * 0.95);
+    const startAt = t;
+    // Звук и анимация запускаются вместе через таймер: так проще остановить
+    songTimers.push(setTimeout(() => press(n, { dur, auto: true }), startAt * 1000));
+    t += beat * len;
+  });
+  songTimers.push(setTimeout(stopSong, t * 1000 + 300));
+}
+document.querySelectorAll('.songs button').forEach(b =>
+  b.addEventListener('click', () => playSong(b.dataset.song, b)));
+</script>
+</body>
+</html>
