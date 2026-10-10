@@ -8,7 +8,7 @@
 <title>Мяу-пианино 🐱🎹</title>
 <style>
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
-  html,body { margin:0; height:100%; overflow:hidden; font-family: "Comic Sans MS","Trebuchet MS",system-ui,sans-serif; }
+  html,body { margin:0; height:100%; overflow:hidden; touch-action:manipulation; font-family: "Comic Sans MS","Trebuchet MS",system-ui,sans-serif; }
   body {
     height:100vh; height:100dvh; /* dvh = реально видимая высота, без панелей Safari */
     background: linear-gradient(160deg,#ffe3ef,#d9f0ff);
@@ -359,7 +359,8 @@ function press(note) {
 }
 
 // Мультитач + «глиссандо» пальцем по клавишам
-const active = new Map(); // pointerId -> note
+const active = new Map(); // pointerId -> { note, x, y } — где сработала последняя клавиша
+const SLIDE_PX = 18; // дрожание пальца меньше этого не считается переходом на соседнюю клавишу
 function noteAt(x, y) {
   const el = document.elementFromPoint(x, y);
   const key = el && el.closest('.key');
@@ -369,18 +370,24 @@ piano.addEventListener('pointerdown', e => {
   e.preventDefault();
   unlockAudio();
   const n = noteAt(e.clientX, e.clientY);
-  active.set(e.pointerId, n);
+  active.set(e.pointerId, { note: n, x: e.clientX, y: e.clientY });
   if (n) press(n);
 });
 piano.addEventListener('pointermove', e => {
-  if (!active.has(e.pointerId)) return;
+  const a = active.get(e.pointerId);
+  if (!a) return;
+  if (Math.hypot(e.clientX - a.x, e.clientY - a.y) < SLIDE_PX) return;
   const n = noteAt(e.clientX, e.clientY);
-  if (n && n !== active.get(e.pointerId)) press(n);
-  active.set(e.pointerId, n);
+  if (n && n !== a.note) press(n);
+  active.set(e.pointerId, { note: n, x: e.clientX, y: e.clientY });
 });
 ['pointerup', 'pointercancel', 'pointerleave'].forEach(t =>
   piano.addEventListener(t, e => active.delete(e.pointerId)));
 document.addEventListener('contextmenu', e => e.preventDefault());
+// iPhone: никакого зума от двойного тапа и щипка — пианино должно стоять на месте
+piano.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+document.addEventListener('dblclick', e => e.preventDefault(), { passive: false });
+document.addEventListener('gesturestart', e => e.preventDefault());
 window.addEventListener('keydown', e => {
   if (e.repeat || e.metaKey || e.ctrlKey) return;
   const n = keyByCode[e.code];
