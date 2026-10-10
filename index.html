@@ -157,7 +157,6 @@
   </div>
 </div>
 
-<script src="songs/prosto.js"></script>
 <script src="songs/sna.js"></script>
 <script>
 // ===================== НАСТРОЙКИ (меняйте тут) =====================
@@ -545,7 +544,7 @@ function setMode(m) {
   document.body.classList.toggle('learn', m === 'learn');
   document.querySelectorAll('.modes button').forEach(b => b.classList.toggle('active', b.dataset.mode === m));
   stopLearn();
-  if (m === 'learn') showSongs();
+  if (m === 'learn') SONGS.length === 1 ? showParts(SONGS[0]) : showSongs();
   else { document.getElementById('parts').classList.remove('show'); buildKeyboard(CONFIG.low, CONFIG.high); }
 }
 document.querySelectorAll('.modes button').forEach(b =>
@@ -567,9 +566,11 @@ function showParts(song) {
   SONG = song;
   buildKeyboard(song.low, song.high);
   box.innerHTML = `<div class="ask">${song.title} — что играем? 🐾</div>`;
-  const back = document.createElement('button');
-  back.textContent = '← Песни'; back.addEventListener('click', showSongs);
-  box.appendChild(back);
+  if (SONGS.length > 1) {
+    const back = document.createElement('button');
+    back.textContent = '← Песни'; back.addEventListener('click', showSongs);
+    box.appendChild(back);
+  }
   [{ name: 'Целиком', from: 0, to: song.notes.length, all: true }, ...song.parts].forEach(part => {
     const b = document.createElement('button');
     b.textContent = part.name; if (part.all) b.className = 'all';
@@ -595,6 +596,7 @@ function showParts(song) {
   box.classList.add('show');
 }
 if (SONGS.length) document.getElementById('modes').hidden = false;
+if (SONGS.length === 1) document.getElementById('learnBtn').textContent = '🎶 ' + SONGS[0].title;
 
 // ---------- Режим песни ----------
 // Песня играет сама: котики поют мелодию, рояль — аккомпанемент, ничего не останавливается.
