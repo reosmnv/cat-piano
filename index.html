@@ -41,6 +41,7 @@
     background:#fff; color:#e0457b; box-shadow:0 3px 0 #f3a3c2; cursor:pointer;
   }
   #parts button.all { background:#e0457b; color:#fff; }
+  #parts button.acc { width:auto; flex-basis:100%; max-width:280px; background:#fff7fb; }
   #piano {
     position:relative; width:min(100%,1000px); flex:1 1 0; min-height:0; max-height:440px;
     background:#7a4a3a; border-radius:20px; padding:12px 8px 8px;
@@ -116,6 +117,9 @@
     .modes button { padding:5px 12px; font-size:14px; }
     #stage { padding:4px 8px 8px; }
     #piano { padding:8px 6px 6px; border-radius:16px; }
+    #parts { gap:4px; padding:4px; }
+    #parts .ask { font-size:14px; }
+    #parts button { padding:4px 9px; font-size:12px; box-shadow:0 2px 0 #f3a3c2; }
   }
 </style>
 </head>
@@ -160,10 +164,19 @@ const CONFIG = {
   // Диапазон клавиш
   low: 'C5', high: 'C6',
 };
-// Звук: настоящее мяуканье, выровненное по высоте.
-// Запись «Meow of a pleading cat» (Wikimedia Commons, общественное достояние).
-const MEOW_URL = 'sounds/meow.wav';
-const MEOW_HZ = 577; // на какой частоте звучит запись
+// Звук: шесть настоящих кошек, у каждой своя высота голоса.
+// Клавиша берёт ближайшую по высоте, так что сдвигать звук почти не приходится.
+// hz — на какой частоте мяукает запись, upTo — до какой ноты включительно её используем.
+// Источники (все CC0 / общественное достояние): Freesound — kyles, peridactyloptrix,
+// Luke100000, Countrygirls13; Wikimedia Commons — «Meow of a pleading cat».
+const MEOWS = [
+  { url: 'sounds/m1.wav', hz: 527, upTo: 'C#5' },
+  { url: 'sounds/m2.wav', hz: 584, upTo: 'D#5' },
+  { url: 'sounds/m3.wav', hz: 661, upTo: 'F5' },
+  { url: 'sounds/m4.wav', hz: 735, upTo: 'G5' },
+  { url: 'sounds/m5.wav', hz: 841, upTo: 'A5' },
+  { url: 'sounds/m6.wav', hz: 920, upTo: 'C6' },
+];
 
 // Песня для режима «Ждёт тебя»: [время в секундах, нота, длительность]
 // Подключается из song-prosto.js; нет файла — режим скрыт
@@ -253,10 +266,11 @@ layoutBlack();
 // ---------- Звук ----------
 const ctx = new (window.AudioContext || window.webkitAudioContext)();
 const master = ctx.createGain(); master.gain.value = 0.9; master.connect(ctx.destination);
-let meowBuf = null;
-fetch(MEOW_URL).then(r => r.arrayBuffer())
+let loaded = 0;
+MEOWS.forEach(m => fetch(m.url).then(r => r.arrayBuffer())
   .then(a => new Promise((ok, err) => ctx.decodeAudioData(a, ok, err)))
-  .then(b => { meowBuf = b; });
+  .then(b => { m.buf = b; loaded++; }));
+const meowFor = note => MEOWS.find(m => midiOf(note) <= midiOf(m.upTo)) || MEOWS[MEOWS.length - 1];
 
 function unlockAudio() {
   // iPhone: играть звук даже при включённом беззвучном режиме
@@ -266,18 +280,54 @@ function unlockAudio() {
 
 const voices = {}; // нота -> звучащий мяу, чтобы повторное нажатие не превращалось в кашу
 function meow(note) {
-  if (!meowBuf) return;
+  const m = meowFor(note);
+  if (!m.buf) return;
   const t = ctx.currentTime;
   const old = voices[note];
   if (old) { old.g.gain.setTargetAtTime(0, t, 0.02); old.s.stop(t + 0.1); }
   const s = ctx.createBufferSource();
-  s.buffer = meowBuf;
-  s.playbackRate.value = freqOf(note) / MEOW_HZ;
+  s.buffer = m.buf;
+  s.playbackRate.value = freqOf(note) / m.hz;
   const g = ctx.createGain();
   s.connect(g); g.connect(master);
   s.start(t);
   voices[note] = { s, g };
   s.onended = () => { if (voices[note] && voices[note].s === s) delete voices[note]; };
+}
+
+// ---------- Аккомпанемент (мягкое электропианино) ----------
+let accOn = localStorage.getItem('accOn') !== '0';
+const accVoices = [];
+function accNote(note, at, dur, vel) {
+  const f = freqOf(note), end = at + Math.max(dur, 0.25) + 0.35;
+  const o1 = ctx.createOscillator(); o1.type = 'sine'; o1.frequency.value = f;
+  const o2 = ctx.createOscillator(); o2.type = 'triangle'; o2.frequency.value = f * 2;
+  const g2 = ctx.createGain(); g2.gain.value = 0.25;
+  const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1800;
+  const env = ctx.createGain();
+  const peak = 0.22 * (vel / 100);
+  env.gain.setValueAtTime(0.0001, at);
+  env.gain.exponentialRampToValueAtTime(peak, at + 0.008);
+  env.gain.exponentialRampToValueAtTime(peak * 0.35, at + 0.25);
+  env.gain.setValueAtTime(peak * 0.35, at + Math.max(dur, 0.25));
+  env.gain.exponentialRampToValueAtTime(0.0001, end);
+  o1.connect(lp); o2.connect(g2); g2.connect(lp); lp.connect(env); env.connect(master);
+  o1.start(at); o2.start(at); o1.stop(end); o2.stop(end);
+  accVoices.push({ at, o1, o2 });
+}
+// Играет кусок аккомпанемента от одной ноты мелодии до следующей (в темпе оригинала)
+function playAcc(from, to) {
+  const now = ctx.currentTime;
+  // то, что ещё не началось с прошлого нажатия, отменяем — игрок уже ушёл дальше
+  for (let i = accVoices.length - 1; i >= 0; i--) {
+    const v = accVoices[i];
+    if (v.at > now + 0.01) { v.o1.stop(); v.o2.stop(); accVoices.splice(i, 1); }
+    else if (v.at < now - 5) accVoices.splice(i, 1);
+  }
+  if (!accOn || !SONG || !SONG.acc) return;
+  SONG.acc.forEach(([o, n, d, v]) => {
+    if (o >= from - 0.02 && o < to - 0.02) accNote(n, now + 0.02 + (o - from), d, v);
+  });
 }
 
 // ---------- Нажатия ----------
@@ -360,12 +410,17 @@ if (SONG) {
   document.getElementById('learnBtn').textContent = '🎶 ' + SONG.title;
   const box = document.getElementById('parts');
   box.innerHTML = '<div class="ask">Что играем? 🐾</div>';
+  const accBtn = document.createElement('button');
+  const accLabel = () => accBtn.textContent = accOn ? '🎵 Аккомпанемент: вкл' : '🔇 Аккомпанемент: выкл';
+  accLabel(); accBtn.className = 'acc';
+  accBtn.addEventListener('click', () => { accOn = !accOn; localStorage.setItem('accOn', accOn ? '1' : '0'); accLabel(); });
   [{ name: 'Целиком', from: 0, to: SONG.notes.length, all: true }, ...SONG.parts].forEach(part => {
     const b = document.createElement('button');
     b.textContent = part.name; if (part.all) b.className = 'all';
     b.addEventListener('click', () => { unlockAudio(); box.classList.remove('show'); startLearn(part); });
     box.appendChild(b);
   });
+  box.appendChild(accBtn);
 }
 
 // ---------- Режим «Ждёт тебя» ----------
@@ -385,12 +440,12 @@ function startLearn(part) {
   lastPart = part;
   const notes = SONG.notes.slice(part.from, part.to)
     .filter(([, n]) => keyByNote[n])
-    .map(([t, n, d]) => ({ t, n, d, hit: false, hitAt: 0 }));
+    .map(([t, n, d, o]) => ({ t, n, d, o, hit: false, hitAt: 0 }));
   // Ноты, звучащие одновременно, — одна «ступенька», нужно нажать все
   const groups = [];
   notes.forEach(x => {
     const g = groups[groups.length - 1];
-    if (g && Math.abs(g.t - x.t) < 0.03) g.notes.push(x); else groups.push({ t: x.t, notes: [x] });
+    if (g && Math.abs(g.t - x.t) < 0.03) g.notes.push(x); else groups.push({ t: x.t, o: x.o, notes: [x] });
   });
   L = { notes, groups, gi: 0, time: groups[0].t - 2.5, last: performance.now(), done: false };
   document.getElementById('finish').classList.remove('show');
@@ -398,6 +453,7 @@ function startLearn(part) {
 }
 function stopLearn() {
   L = null;
+  playAcc(0, 0); // отменить запланированный аккомпанемент
   KEYS.forEach(k => k.el.classList.remove('target'));
   lctx.clearRect(0, 0, lane.width, lane.height);
 }
@@ -422,6 +478,8 @@ function learnPress(note) {
     if (g.notes.every(x => x.hit)) {
       L.time = Math.max(L.time, g.t);
       L.gi++;
+      const next = L.groups[L.gi];
+      playAcc(g.o, next ? next.o : g.o + 8); // после последней ноты — доиграть концовку
       if (L.gi >= L.groups.length) { L.done = true; setTimeout(() => mode === 'learn' && show('finish'), 900); }
     }
   } else if (waiting) {
