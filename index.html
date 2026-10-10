@@ -130,7 +130,7 @@
   <h1 id="title"></h1>
   <div class="modes" id="modes" hidden>
     <button data-mode="free" class="active">🎹 Свободно</button>
-    <button data-mode="learn" id="learnBtn">🎶 Песня</button>
+    <button data-mode="learn" id="learnBtn">🎶 Песни</button>
   </div>
 </header>
 <div id="rotate">📱↻ Поверни телефон — котикам будет просторнее</div>
@@ -155,7 +155,9 @@
   </div>
 </div>
 
-<script src="song-prosto.js"></script>
+<script src="songs/prosto.js"></script>
+<script src="songs/sna.js"></script>
+<script src="songs/pirates.js"></script>
 <script>
 // ===================== НАСТРОЙКИ (меняйте тут) =====================
 const CONFIG = {
@@ -177,9 +179,9 @@ const MEOWS = [
   { url: 'sounds/m3.wav', hz: 661, upTo: 'C6' },
 ];
 
-// Песня для режима «Ждёт тебя»: [время в секундах, нота, длительность]
-// Подключается из song-prosto.js; нет файла — режим скрыт
-const SONG = window.SONG_DATA || null;
+// Песни подключаются из songs/*.js (мелодия только на белых клавишах)
+const SONGS = window.SONGS || [];
+let SONG = null; // выбранная песня
 // ===================================================================
 
 document.getElementById('title').textContent = CONFIG.title;
@@ -188,9 +190,10 @@ document.getElementById('secretText').textContent = CONFIG.secretMessage;
 // ---------- Ноты ----------
 const NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 const RU = ['До','До♯','Ре','Ре♯','Ми','Фа','Фа♯','Соль','Соль♯','Ля','Ля♯','Си'];
-// Чёрные клавиши не мяукают, а играют рояль — ноты из лада песни (пентатоника ре минора),
-// октавой ниже котиков. Так любое нажатие звучит созвучно.
-const BLACK_PIANO = { 'C#': 'D4', 'D#': 'F4', 'F#': 'G4', 'G#': 'A4', 'A#': 'C5' };
+// Чёрные клавиши не мяукают, а играют рояль — ноту из пентатоники (Ре Фа Соль Ля До),
+// октавой ниже. Она созвучна всем трём песням, так что любое нажатие звучит в лад.
+// До♯→Ре, Ре♯→Фа, Фа♯→Соль, Соль♯→Ля, Ля♯→До (сдвиг в полутонах).
+const BLACK_PIANO = { 1: 1, 3: 2, 6: 1, 8: 1, 10: 2 };
 // Рояль: Salamander Grand Piano, Alexander Holm, CC BY 3.0 (через Tone.js)
 const PIANO = [
   // gain — выравнивание громкости записей (рояль чуть тише котиков)
@@ -240,23 +243,30 @@ function catSVG(color, small) {
 
 // ---------- Строим клавиатуру ----------
 const piano = document.getElementById('piano');
-const KEYS = [];          // { note, el, black, color, afterWhite }
+const KEYS = [];          // { note, el, black, piano, color, afterWhite }
 const keyByNote = {}, keyByCode = {};
-let whiteCount = 0;
-for (let m = midiOf(CONFIG.low); m <= midiOf(CONFIG.high); m++) {
-  const note = nameOf(m), black = note.includes('#');
-  const el = document.createElement('div');
-  el.className = 'key ' + (black ? 'black' : 'white');
-  el.dataset.note = note;
-  const color = black ? '#2b2230' : CAT_COLORS[whiteCount % CAT_COLORS.length];
-  const code = black ? UPPER_CODES[whiteCount] : WHITE_CODES[whiteCount];
-  const pianoNoteName = black ? BLACK_PIANO[NAMES[m % 12]] : null;
-  el.innerHTML = catSVG(color, black) + `<div class="label">${pianoNoteName ? '🎹' + RU[midiOf(pianoNoteName) % 12] : RU[m % 12]}</div>` + (code ? `<div class="hint">${CODE_LABEL(code)}</div>` : '');
-  piano.appendChild(el);
-  const k = { note, el, black, piano: pianoNoteName, color: black ? '#6b4f7a' : (color === '#ffffff' ? '#f3c6d8' : color), afterWhite: whiteCount - 1 };
-  KEYS.push(k); keyByNote[note] = k;
-  if (code) keyByCode[code] = note;
-  if (!black) whiteCount++;
+function buildKeyboard(low, high) {
+  piano.innerHTML = '';
+  KEYS.length = 0;
+  for (const k in keyByNote) delete keyByNote[k];
+  for (const k in keyByCode) delete keyByCode[k];
+  let whiteCount = 0;
+  for (let m = midiOf(low); m <= midiOf(high); m++) {
+    const note = nameOf(m), black = note.includes('#');
+    const el = document.createElement('div');
+    el.className = 'key ' + (black ? 'black' : 'white');
+    el.dataset.note = note;
+    const color = black ? '#2b2230' : CAT_COLORS[whiteCount % CAT_COLORS.length];
+    const code = black ? UPPER_CODES[whiteCount] : WHITE_CODES[whiteCount];
+    const pianoNoteName = black ? nameOf(m + BLACK_PIANO[m % 12] - 12) : null;
+    el.innerHTML = catSVG(color, black) + `<div class="label">${pianoNoteName ? '🎹' + RU[midiOf(pianoNoteName) % 12] : RU[m % 12]}</div>` + (code ? `<div class="hint">${CODE_LABEL(code)}</div>` : '');
+    piano.appendChild(el);
+    const k = { note, el, black, piano: pianoNoteName, color: black ? '#6b4f7a' : (color === '#ffffff' ? '#f3c6d8' : color), afterWhite: whiteCount - 1 };
+    KEYS.push(k); keyByNote[note] = k;
+    if (code) keyByCode[code] = note;
+    if (!black) whiteCount++;
+  }
+  layoutBlack();
 }
 function layoutBlack() {
   const whites = piano.querySelectorAll('.white');
@@ -272,7 +282,7 @@ function layoutBlack() {
   });
 }
 new ResizeObserver(() => { layoutBlack(); resizeLane(); }).observe(piano);
-layoutBlack();
+buildKeyboard(CONFIG.low, CONFIG.high);
 
 // ---------- Звук ----------
 const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -433,17 +443,32 @@ function setMode(m) {
   document.body.classList.toggle('learn', m === 'learn');
   document.querySelectorAll('.modes button').forEach(b => b.classList.toggle('active', b.dataset.mode === m));
   stopLearn();
-  document.getElementById('parts').classList.toggle('show', m === 'learn');
+  if (m === 'learn') showSongs();
+  else { document.getElementById('parts').classList.remove('show'); buildKeyboard(CONFIG.low, CONFIG.high); }
 }
 document.querySelectorAll('.modes button').forEach(b =>
   b.addEventListener('click', () => { unlockAudio(); setMode(b.dataset.mode); }));
 let speed = +(localStorage.getItem('speed') || 0.75);
-if (SONG) {
-  document.getElementById('modes').hidden = false;
-  document.getElementById('learnBtn').textContent = '🎶 ' + SONG.title;
-  const box = document.getElementById('parts');
-  box.innerHTML = '<div class="ask">Что играем? 🐾</div>';
-  [{ name: 'Целиком', from: 0, to: SONG.notes.length, all: true }, ...SONG.parts].forEach(part => {
+const box = document.getElementById('parts');
+// Меню: сначала песня, потом часть, скорость и аккомпанемент
+function showSongs() {
+  box.innerHTML = '<div class="ask">Какую песню играем? 🐾</div>';
+  SONGS.forEach(song => {
+    const b = document.createElement('button');
+    b.className = 'all'; b.textContent = '🎶 ' + song.title;
+    b.addEventListener('click', () => showParts(song));
+    box.appendChild(b);
+  });
+  box.classList.add('show');
+}
+function showParts(song) {
+  SONG = song;
+  buildKeyboard(song.low, song.high);
+  box.innerHTML = `<div class="ask">${song.title} — что играем? 🐾</div>`;
+  const back = document.createElement('button');
+  back.textContent = '← Песни'; back.addEventListener('click', showSongs);
+  box.appendChild(back);
+  [{ name: 'Целиком', from: 0, to: song.notes.length, all: true }, ...song.parts].forEach(part => {
     const b = document.createElement('button');
     b.textContent = part.name; if (part.all) b.className = 'all';
     b.addEventListener('click', () => { unlockAudio(); box.classList.remove('show'); startLearn(part); });
@@ -465,7 +490,9 @@ if (SONG) {
   accBtn.addEventListener('click', () => { accOn = !accOn; localStorage.setItem('accOn', accOn ? '1' : '0'); accLabel(); });
   row.appendChild(accBtn);
   box.appendChild(row);
+  box.classList.add('show');
 }
+if (SONGS.length) document.getElementById('modes').hidden = false;
 
 // ---------- Режим песни ----------
 // Песня играет сама: котики поют мелодию, рояль — аккомпанемент, ничего не останавливается.
@@ -487,8 +514,8 @@ function startLearn(part) {
   lastPart = part;
   const notes = [];
   SONG.notes.slice(part.from, part.to).filter(([, n]) => keyByNote[n]).forEach(([, n, d, o]) => {
-    const prev = notes[notes.length - 1], gap = prev ? o - prev.o : 9;
-    // очень быстрый повтор той же ноты нажать нереально — его не засчитываем, просто поём
+    const prev = notes[notes.length - 1], gap = (prev ? o - prev.o : 9) / speed; // в реальных секундах
+    // слишком быструю ноту нажать нереально — её не засчитываем, просто поём
     const tiny = !!prev && (gap < 0.15 || (gap < 0.2 && prev.n === n));
     if (prev) prev.len = Math.min(prev.d, gap);
     notes.push({ n, o, d, len: d, tiny, hit: false, hitAt: 0, sung: false });
@@ -515,7 +542,7 @@ document.getElementById('again').addEventListener('click', () => {
 document.getElementById('other').addEventListener('click', () => {
   document.getElementById('finish').classList.remove('show');
   stopLearn();
-  document.getElementById('parts').classList.add('show');
+  showParts(SONG);
 });
 
 // Попал ли игрок: ближайшая ещё не пойманная нота того же котика в пределах окна
