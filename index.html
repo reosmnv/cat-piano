@@ -303,14 +303,19 @@ function unlockAudio() {
 }
 
 const voices = {}; // нота -> звучащий мяу, чтобы повторное нажатие не превращалось в кашу
-// Записи рояля разной громкости — выравниваем по атаке (самые громкие 300 мс)
+// Записи рояля разной громкости — выравниваем по самому громкому моменту (окна по 50 мс)
 const PIANO_LEVEL = 0.16;
 PIANO.forEach(p => fetch(p.url).then(r => r.arrayBuffer())
   .then(a => new Promise((ok, err) => ctx.decodeAudioData(a, ok, err)))
   .then(b => {
-    const x = b.getChannelData(0), n = Math.min(x.length, Math.round(b.sampleRate * 0.3));
-    let e = 0; for (let i = 0; i < n; i++) e += x[i] * x[i];
-    p.gain = PIANO_LEVEL / Math.sqrt(e / n);
+    // записи стерео, каналы разной громкости — меряем их сумму (то, что слышно)
+    const chs = [...Array(b.numberOfChannels).keys()].map(c => b.getChannelData(c));
+    const x = new Float32Array(Math.min(b.length, b.sampleRate * 1.1));
+    for (let i = 0; i < x.length; i++) { let v = 0; for (const c of chs) v += c[i]; x[i] = v / chs.length; }
+    const w = Math.round(b.sampleRate * 0.05), end = x.length - w;
+    let loud = 0;
+    for (let i = 0; i < end; i += w >> 1) { let e = 0; for (let j = 0; j < w; j++) e += x[i + j] * x[i + j]; loud = Math.max(loud, Math.sqrt(e / w)); }
+    p.gain = PIANO_LEVEL / loud;
     p.buf = b; loaded++;
   }));
 const nearestPiano = note => PIANO.reduce((a, b) => Math.abs(midiOf(b.note) - midiOf(note)) < Math.abs(midiOf(a.note) - midiOf(note)) ? b : a);
