@@ -30,6 +30,17 @@
   #laneWrap { display:none; position:relative; width:min(100%,1000px); flex:0.9 1 0; min-height:0; }
   body.learn #laneWrap { display:block; }
   #lane { position:absolute; inset:0; width:100%; height:100%; }
+  #parts {
+    position:absolute; inset:0; display:none; flex-wrap:wrap; gap:6px; align-content:center; justify-content:center;
+    padding:8px; background:rgba(255,255,255,.75); border-radius:18px; overflow:auto;
+  }
+  #parts.show { display:flex; }
+  #parts .ask { width:100%; text-align:center; color:#e0457b; font-weight:bold; font-size:clamp(14px,2.6vw,18px); }
+  #parts button {
+    font:inherit; font-size:clamp(12px,2.2vw,15px); border:none; border-radius:999px; padding:6px 12px;
+    background:#fff; color:#e0457b; box-shadow:0 3px 0 #f3a3c2; cursor:pointer;
+  }
+  #parts button.all { background:#e0457b; color:#fff; }
   #piano {
     position:relative; width:min(100%,1000px); flex:1 1 0; min-height:0; max-height:440px;
     background:#7a4a3a; border-radius:20px; padding:12px 8px 8px;
@@ -46,7 +57,7 @@
   }
   .white.on { transform:translateY(3px); box-shadow: inset 0 -3px 0 #eadfce; background:#fff4fa; }
   .black {
-    position:absolute; top:0; height:54%; z-index:2;
+    position:absolute; top:0; height:50%; z-index:2;
     background:#2b2230; box-shadow: inset 0 -7px 0 #110c14;
     display:flex; flex-direction:column; align-items:center; justify-content:flex-end; padding-bottom:5cqh;
     transition: transform .06s;
@@ -118,7 +129,7 @@
 </header>
 <div id="rotate">📱↻ Поверни телефон — котикам будет просторнее</div>
 <div id="stage">
-  <div id="laneWrap"><canvas id="lane"></canvas></div>
+  <div id="laneWrap"><canvas id="lane"></canvas><div id="parts"></div></div>
   <div id="piano"></div>
 </div>
 
@@ -134,10 +145,11 @@
     <div class="big">🎉😸🎉</div>
     <p>Ура! Песня сыграна!</p>
     <button id="again">Ещё раз 🔁</button>
-    <button data-close>Мур! 🐾</button>
+    <button id="other">Другая часть 🎶</button>
   </div>
 </div>
 
+<script src="song-prosto.js"></script>
 <script>
 // ===================== НАСТРОЙКИ (меняйте тут) =====================
 const CONFIG = {
@@ -154,8 +166,8 @@ const MEOW_URL = 'sounds/meow.wav';
 const MEOW_HZ = 577; // на какой частоте звучит запись
 
 // Песня для режима «Ждёт тебя»: [время в секундах, нота, длительность]
-// null — режим скрыт
-const SONG = null;
+// Подключается из song-prosto.js; нет файла — режим скрыт
+const SONG = window.SONG_DATA || null;
 // ===================================================================
 
 document.getElementById('title').textContent = CONFIG.title;
@@ -338,13 +350,22 @@ function setMode(m) {
   mode = m;
   document.body.classList.toggle('learn', m === 'learn');
   document.querySelectorAll('.modes button').forEach(b => b.classList.toggle('active', b.dataset.mode === m));
-  if (m === 'learn') startLearn(); else stopLearn();
+  stopLearn();
+  document.getElementById('parts').classList.toggle('show', m === 'learn');
 }
 document.querySelectorAll('.modes button').forEach(b =>
   b.addEventListener('click', () => { unlockAudio(); setMode(b.dataset.mode); }));
 if (SONG) {
   document.getElementById('modes').hidden = false;
   document.getElementById('learnBtn').textContent = '🎶 ' + SONG.title;
+  const box = document.getElementById('parts');
+  box.innerHTML = '<div class="ask">Что играем? 🐾</div>';
+  [{ name: 'Целиком', from: 0, to: SONG.notes.length, all: true }, ...SONG.parts].forEach(part => {
+    const b = document.createElement('button');
+    b.textContent = part.name; if (part.all) b.className = 'all';
+    b.addEventListener('click', () => { unlockAudio(); box.classList.remove('show'); startLearn(part); });
+    box.appendChild(b);
+  });
 }
 
 // ---------- Режим «Ждёт тебя» ----------
@@ -359,8 +380,10 @@ function resizeLane() {
   lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
-function startLearn() {
-  const notes = SONG.notes
+let lastPart = null;
+function startLearn(part) {
+  lastPart = part;
+  const notes = SONG.notes.slice(part.from, part.to)
     .filter(([, n]) => keyByNote[n])
     .map(([t, n, d]) => ({ t, n, d, hit: false, hitAt: 0 }));
   // Ноты, звучащие одновременно, — одна «ступенька», нужно нажать все
@@ -376,10 +399,16 @@ function startLearn() {
 function stopLearn() {
   L = null;
   KEYS.forEach(k => k.el.classList.remove('target'));
+  lctx.clearRect(0, 0, lane.width, lane.height);
 }
 document.getElementById('again').addEventListener('click', () => {
   document.getElementById('finish').classList.remove('show');
-  startLearn();
+  startLearn(lastPart);
+});
+document.getElementById('other').addEventListener('click', () => {
+  document.getElementById('finish').classList.remove('show');
+  stopLearn();
+  document.getElementById('parts').classList.add('show');
 });
 
 function current() { return L && L.groups[L.gi]; }
@@ -418,7 +447,7 @@ function learnFrame(now) {
   KEYS.forEach(k => k.el.classList.toggle('target', need.has(k.note)));
 
   const W = lane.clientWidth, H = lane.clientHeight;
-  const pps = H / 2.2; // пикселей на секунду
+  const pps = Math.max(H / 2.2, 90); // пикселей на секунду; не меньше, чтобы ноты подряд не слипались
   lctx.clearRect(0, 0, W, H);
   // дорожки
   lctx.fillStyle = 'rgba(255,255,255,.35)';
@@ -435,7 +464,7 @@ function learnFrame(now) {
 
   L.notes.forEach(x => {
     const yb = H - (x.t - L.time) * pps;
-    const h = Math.max(22, x.d * pps - 6);
+    const h = Math.max(Math.min(22, 0.32 * pps - 6), x.d * pps - 6);
     if (yb < 0 || (yb - h > H)) return;
     const k = keyByNote[x.n];
     let [cx, cw] = col[x.n];
