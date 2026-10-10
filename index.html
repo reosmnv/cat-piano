@@ -66,6 +66,8 @@
     transition: transform .06s;
   }
   .black.on { transform:translateY(3px); background:#4a3a52; }
+  /* В режиме песни чёрные клавиши только для вида: касание проходит сквозь них на белую */
+  body.learn .black { pointer-events:none; filter:saturate(.6) brightness(.85); }
   .cat { height:30cqh; max-width:94cqw; transition: transform .12s cubic-bezier(.3,2,.5,1); }
   .black .cat { height:auto; width:86cqw; max-height:40cqh; }
   .key.on .cat { transform: translateY(-14%) scale(1.12) rotate(-4deg); }
@@ -371,6 +373,7 @@ let presses = 0, secretShown = false;
 function press(note) {
   const k = keyByNote[note];
   if (!k) return;
+  if (k.black && mode === 'learn') return; // в песне чёрные не играют
   // В песне: попал вовремя — ноту и так споёт песня, лишний звук не нужен
   const hit = mode === 'learn' && learnPress(note);
   if (!hit) { if (k.piano) pianoNote(note, k.piano); else meow(note); }
@@ -402,7 +405,15 @@ const SLIDE_PX = 18; // дрожание пальца меньше этого н
 function noteAt(x, y) {
   const el = document.elementFromPoint(x, y);
   const key = el && el.closest('.key');
-  return key ? key.dataset.note : null;
+  if (key) return key.dataset.note;
+  // щель между клавишами (или под чёрной в режиме песни) — ближайшая белая
+  if (!el || !el.closest('#piano')) return null;
+  let best = null, dist = Infinity;
+  KEYS.filter(k => !k.black).forEach(k => {
+    const r = k.el.getBoundingClientRect(), d = Math.abs(x - (r.left + r.right) / 2);
+    if (d < dist) { dist = d; best = k.note; }
+  });
+  return best;
 }
 piano.addEventListener('pointerdown', e => {
   e.preventDefault();
