@@ -164,18 +164,15 @@ const CONFIG = {
   // Диапазон клавиш
   low: 'C5', high: 'C6',
 };
-// Звук: шесть настоящих кошек, у каждой своя высота голоса.
+// Звук: три настоящие кошки, у каждой своя высота голоса.
 // Клавиша берёт ближайшую по высоте, так что сдвигать звук почти не приходится.
 // hz — на какой частоте мяукает запись, upTo — до какой ноты включительно её используем.
-// Источники (все CC0 / общественное достояние): Freesound — kyles, peridactyloptrix,
-// Luke100000, Countrygirls13; Wikimedia Commons — «Meow of a pleading cat».
+// Источники (все CC0 / общественное достояние): Freesound — kyles, peridactyloptrix;
+// Wikimedia Commons — «Meow of a pleading cat».
 const MEOWS = [
   { url: 'sounds/m1.wav', hz: 527, upTo: 'C#5' },
   { url: 'sounds/m2.wav', hz: 584, upTo: 'D#5' },
-  { url: 'sounds/m3.wav', hz: 661, upTo: 'F5' },
-  { url: 'sounds/m4.wav', hz: 735, upTo: 'G5' },
-  { url: 'sounds/m5.wav', hz: 841, upTo: 'A5' },
-  { url: 'sounds/m6.wav', hz: 920, upTo: 'C6' },
+  { url: 'sounds/m3.wav', hz: 661, upTo: 'C6' },
 ];
 
 // Песня для режима «Ждёт тебя»: [время в секундах, нота, длительность]
